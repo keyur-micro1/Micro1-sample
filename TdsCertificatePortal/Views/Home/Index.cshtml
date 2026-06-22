@@ -1,0 +1,436 @@
+@model TdsCertificatePortal.Models.ViewModels.IndexViewModel
+@{
+    ViewData["Title"] = "TDS Certificate Portal";
+}
+
+@functions {
+    private static string BadgeClass(string status) => status switch
+    {
+        PortalStatuses.ReadyToSend => "text-bg-primary",
+        PortalStatuses.Sent => "text-bg-success",
+        PortalStatuses.Failed => "text-bg-danger",
+        PortalStatuses.EmailMissing => "text-bg-warning",
+        PortalStatuses.DuplicatePan => "text-bg-warning",
+        PortalStatuses.DuplicatePdf => "text-bg-warning",
+        PortalStatuses.PdfMissing => "text-bg-secondary",
+        PortalStatuses.InvalidFilename => "text-bg-danger",
+        PortalStatuses.Sending => "text-bg-info",
+        _ => "text-bg-light"
+    };
+}
+
+@Html.AntiForgeryToken()
+
+<div class="page-shell">
+    <div class="page-title">
+        <div>
+            <h1>TDS Certificate Email Distribution</h1>
+            <span>Session-based Form 16 Part B processing</span>
+        </div>
+        <form asp-action="Cleanup" method="post">
+            <button class="btn btn-outline-danger btn-sm" type="submit">End Session & Cleanup</button>
+        </form>
+    </div>
+
+    @if (TempData["Success"] is not null)
+    {
+        <div class="alert alert-success">@TempData["Success"]</div>
+    }
+    @if (TempData["Error"] is not null)
+    {
+        <div class="alert alert-danger">@TempData["Error"]</div>
+    }
+
+    <section class="panel">
+        <div class="panel-header">
+            <h2>SMTP Configuration</h2>
+            <span class="status-pill @(Model.HasSmtpSettings ? "ready" : "pending")">@(Model.HasSmtpSettings ? "Configured" : "Pending")</span>
+        </div>
+        <form method="post" asp-action="SaveSmtp" class="row g-3">
+            <div class="col-md-3">
+                <label class="form-label" for="SenderEmail">Sender Email Address</label>
+                <input class="form-control" id="SenderEmail" name="SenderEmail" value="@Model.SmtpSettings.SenderEmail" type="email" required />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label" for="UserName">SMTP Username</label>
+                <input class="form-control" id="UserName" name="UserName" value="@Model.SmtpSettings.UserName" type="text" />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label" for="Password">Password</label>
+                <input class="form-control" id="Password" name="Password" type="password" autocomplete="off" placeholder="@(Model.HasSmtpSettings ? "Stored for this session" : "")" @(Model.HasSmtpSettings ? "" : "required") />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label" for="CcEmail">CC Email Address</label>
+                <input class="form-control" id="CcEmail" name="CcEmail" value="@Model.SmtpSettings.CcEmail" type="email" required />
+            </div>
+            <div class="col-md-4">
+                <label class="form-label" for="SmtpHost">SMTP Host</label>
+                <input class="form-control" id="SmtpHost" name="SmtpHost" value="@Model.SmtpSettings.SmtpHost" required />
+            </div>
+            <div class="col-md-2">
+                <label class="form-label" for="SmtpPort">SMTP Port</label>
+                <input class="form-control" id="SmtpPort" name="SmtpPort" value="@Model.SmtpSettings.SmtpPort" type="number" min="1" max="65535" required />
+            </div>
+            <div class="col-md-2">
+                <label class="form-label" for="EnableSsl">SSL/TLS</label>
+                <select class="form-select" id="EnableSsl" name="EnableSsl">
+                    <option value="true" selected="@Model.SmtpSettings.EnableSsl">Enabled</option>
+                    <option value="false" selected="@(!Model.SmtpSettings.EnableSsl)">Disabled</option>
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label" for="TestRecipientEmail">Test Recipient Email</label>
+                <input class="form-control" id="TestRecipientEmail" name="TestRecipientEmail" value="@Model.SmtpSettings.TestRecipientEmail" type="email" />
+            </div>
+            <div class="col-12 button-row">
+                <button class="btn btn-primary" type="submit" formaction="@Url.Action("SaveSmtp")">Save SMTP</button>
+                <button class="btn btn-outline-primary" type="submit" formaction="@Url.Action("TestSmtpConnection")">Test Connection</button>
+                <button class="btn btn-outline-success" type="submit" formaction="@Url.Action("SendTestEmail")">Send Test Email</button>
+            </div>
+        </form>
+    </section>
+
+    <section class="panel">
+        <div class="panel-header">
+            <h2>Files</h2>
+        </div>
+        <form method="post" asp-action="ProcessFiles" enctype="multipart/form-data" class="row g-3">
+            <div class="col-md-6">
+                <label class="form-label" for="zipFile">Certificate ZIP File</label>
+                <input class="form-control" id="zipFile" name="zipFile" type="file" accept=".zip" required @(Model.HasSmtpSettings ? "" : "disabled") />
+            </div>
+            <div class="col-md-6">
+                <label class="form-label" for="csvFile">Employee CSV File</label>
+                <input class="form-control" id="csvFile" name="csvFile" type="file" accept=".csv" required @(Model.HasSmtpSettings ? "" : "disabled") />
+            </div>
+            <div class="col-12 button-row">
+                <button class="btn btn-primary" type="submit" @(Model.HasSmtpSettings ? "" : "disabled")>Upload & Process</button>
+            </div>
+        </form>
+    </section>
+
+    @if (Model.HasRecords)
+    {
+        <section class="panel">
+            <div class="panel-header">
+                <h2>Validation & Reports</h2>
+            </div>
+            <form asp-action="UpdateTemplate" method="post" class="row g-3 template-form">
+                <div class="col-md-5">
+                    <label class="form-label" for="subjectTemplate">Email Subject</label>
+                    <input class="form-control" id="subjectTemplate" name="subjectTemplate" value="@Model.SubjectTemplate" />
+                </div>
+                <div class="col-md-7">
+                    <label class="form-label" for="bodyTemplate">Email Body</label>
+                    <textarea class="form-control" id="bodyTemplate" name="bodyTemplate" rows="4">@Model.BodyTemplate</textarea>
+                </div>
+                <div class="col-12 button-row">
+                    <button class="btn btn-outline-primary" type="submit">Save Template</button>
+                    <button class="btn btn-outline-secondary" type="button" id="dryRunButton">Validate Dry Run</button>
+                    <a class="btn btn-outline-secondary" asp-action="Report" asp-route-type="mapping" asp-route-format="csv">Mapping CSV</a>
+                    <a class="btn btn-outline-secondary" asp-action="Report" asp-route-type="mapping" asp-route-format="xlsx">Mapping Excel</a>
+                    <a class="btn btn-outline-secondary" asp-action="Report" asp-route-type="delivery" asp-route-format="csv">Delivery CSV</a>
+                    <a class="btn btn-outline-secondary" asp-action="Report" asp-route-type="delivery" asp-route-format="xlsx">Delivery Excel</a>
+                </div>
+            </form>
+            <div id="dryRunResult" class="dry-run-result"></div>
+        </section>
+
+        <section class="metric-grid">
+            <div class="metric"><span>Total Employees</span><strong>@Model.Summary.TotalEmployees</strong></div>
+            <div class="metric"><span>Total PDFs</span><strong>@Model.Summary.TotalPdfs</strong></div>
+            <div class="metric"><span>Matched Records</span><strong>@Model.Summary.MatchedRecords</strong></div>
+            <div class="metric"><span>Unmatched Employees</span><strong>@Model.Summary.UnmatchedEmployees</strong></div>
+            <div class="metric"><span>Unmatched PDFs</span><strong>@Model.Summary.UnmatchedPdfs</strong></div>
+            <div class="metric"><span>Missing Emails</span><strong>@Model.Summary.MissingEmails</strong></div>
+            <div class="metric"><span>Duplicate PANs</span><strong>@Model.Summary.DuplicatePans</strong></div>
+            <div class="metric"><span>Duplicate PDFs</span><strong>@Model.Summary.DuplicatePdfs</strong></div>
+            <div class="metric"><span>Ready To Send</span><strong>@Model.Summary.ReadyToSend</strong></div>
+            <div class="metric"><span>Sent</span><strong>@Model.Summary.Sent</strong></div>
+            <div class="metric"><span>Failed</span><strong>@Model.Summary.Failed</strong></div>
+        </section>
+
+        <section class="panel">
+            <div class="panel-header">
+                <h2>Employees</h2>
+            </div>
+            <div class="filters row g-2">
+                <div class="col-md-2"><input class="form-control filter-input" id="filterCode" placeholder="Employee Code" /></div>
+                <div class="col-md-2"><input class="form-control filter-input" id="filterName" placeholder="Employee Name" /></div>
+                <div class="col-md-2"><input class="form-control filter-input" id="filterPan" placeholder="PAN Number" /></div>
+                <div class="col-md-3"><input class="form-control filter-input" id="filterEmail" placeholder="Email Address" /></div>
+                <div class="col-md-3">
+                    <select class="form-select filter-input" id="filterStatus">
+                        <option value="">All Statuses</option>
+                        @foreach (var status in Model.Statuses)
+                        {
+                            <option value="@status">@status</option>
+                        }
+                    </select>
+                </div>
+            </div>
+            <div class="bulk-actions">
+                <button class="btn btn-outline-secondary btn-sm" type="button" id="selectAllVisible">Select All</button>
+                <button class="btn btn-outline-secondary btn-sm" type="button" id="deselectAll">Deselect All</button>
+                <button class="btn btn-primary btn-sm" type="button" id="sendSelected">Send Selected</button>
+                <button class="btn btn-outline-primary btn-sm" type="button" id="sendAll">Send All</button>
+                <button class="btn btn-outline-danger btn-sm" type="button" id="retryFailed">Retry Failed Emails</button>
+            </div>
+            <div class="progress send-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+                <div class="progress-bar" id="sendProgressBar" style="width:0%">0%</div>
+            </div>
+            <div id="sendLog" class="send-log"></div>
+
+            <div class="table-responsive">
+                <table class="table table-sm align-middle employee-table">
+                    <thead>
+                        <tr>
+                            <th></th>
+                            <th>Employee Code</th>
+                            <th>Employee Name</th>
+                            <th>PAN Number</th>
+                            <th>Email Address</th>
+                            <th>PDF Filename</th>
+                            <th>Status</th>
+                            <th>Sent Date</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    @foreach (var record in Model.Records)
+                    {
+                        <tr id="record-@record.Id"
+                            data-id="@record.Id"
+                            data-code="@record.EmployeeCode"
+                            data-name="@record.EmployeeName"
+                            data-pan="@record.PanNumber"
+                            data-email="@record.EmailAddress"
+                            data-status="@record.Status"
+                            data-can-send="@record.CanSend.ToString().ToLowerInvariant()">
+                            <td><input class="form-check-input row-select" type="checkbox" value="@record.Id" @(record.CanSend ? "" : "disabled") /></td>
+                            <td>@record.EmployeeCode</td>
+                            <td>@record.EmployeeName</td>
+                            <td>@record.PanNumber</td>
+                            <td>@record.EmailAddress</td>
+                            <td class="pdf-name">@record.PdfFileName</td>
+                            <td>
+                                <span class="badge @BadgeClass(record.Status) status-badge">@record.Status</span>
+                                <small class="detail-text">@record.StatusDetail</small>
+                            </td>
+                            <td class="sent-at">@(record.SentAtUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "")</td>
+                            <td class="action-cell">
+                                @if (record.HasPdf)
+                                {
+                                    <a class="btn btn-outline-secondary btn-sm" asp-action="PreviewPdf" asp-route-id="@record.Id" target="_blank">View PDF</a>
+                                    <a class="btn btn-outline-secondary btn-sm" asp-action="DownloadPdf" asp-route-id="@record.Id">Download</a>
+                                }
+                                <button class="btn btn-outline-primary btn-sm send-one" type="button" data-id="@record.Id" @(record.CanSend ? "" : "disabled")>@(record.Status == PortalStatuses.Sent ? "Resend Email" : "Send Email")</button>
+                            </td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        @if (Model.PdfIssues.Count > 0)
+        {
+            <section class="panel">
+                <div class="panel-header">
+                    <h2>PDF Issues</h2>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm issue-table">
+                        <thead>
+                            <tr>
+                                <th>PDF Filename</th>
+                                <th>PAN Number</th>
+                                <th>Employee Name</th>
+                                <th>Status</th>
+                                <th>Details</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        @foreach (var issue in Model.PdfIssues)
+                        {
+                            <tr>
+                                <td>@issue.FileName</td>
+                                <td>@issue.PanNumber</td>
+                                <td>@issue.EmployeeName</td>
+                                <td><span class="badge @BadgeClass(issue.Status)">@issue.Status</span></td>
+                                <td>@issue.Detail</td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        }
+    }
+</div>
+
+@section Scripts {
+    <script>
+        const token = document.querySelector('input[name="__RequestVerificationToken"]').value;
+        const rows = Array.from(document.querySelectorAll('.employee-table tbody tr'));
+        const progressBar = document.getElementById('sendProgressBar');
+        const sendLog = document.getElementById('sendLog');
+
+        function normalize(value) {
+            return (value || '').toLowerCase().trim();
+        }
+
+        function applyFilters() {
+            const code = normalize(document.getElementById('filterCode')?.value);
+            const name = normalize(document.getElementById('filterName')?.value);
+            const pan = normalize(document.getElementById('filterPan')?.value);
+            const email = normalize(document.getElementById('filterEmail')?.value);
+            const status = document.getElementById('filterStatus')?.value || '';
+
+            rows.forEach(row => {
+                const visible =
+                    normalize(row.dataset.code).includes(code) &&
+                    normalize(row.dataset.name).includes(name) &&
+                    normalize(row.dataset.pan).includes(pan) &&
+                    normalize(row.dataset.email).includes(email) &&
+                    (!status || row.dataset.status === status);
+                row.classList.toggle('d-none', !visible);
+            });
+        }
+
+        document.querySelectorAll('.filter-input').forEach(input => input.addEventListener('input', applyFilters));
+        document.getElementById('filterStatus')?.addEventListener('change', applyFilters);
+
+        document.getElementById('selectAllVisible')?.addEventListener('click', () => {
+            rows.filter(row => !row.classList.contains('d-none')).forEach(row => {
+                const checkbox = row.querySelector('.row-select');
+                if (checkbox && !checkbox.disabled) {
+                    checkbox.checked = true;
+                }
+            });
+        });
+
+        document.getElementById('deselectAll')?.addEventListener('click', () => {
+            document.querySelectorAll('.row-select').forEach(checkbox => checkbox.checked = false);
+        });
+
+        document.querySelectorAll('.send-one').forEach(button => {
+            button.addEventListener('click', async () => sendRecords([button.dataset.id]));
+        });
+
+        document.getElementById('sendSelected')?.addEventListener('click', async () => {
+            const ids = Array.from(document.querySelectorAll('.row-select:checked')).map(x => x.value);
+            await sendRecords(ids);
+        });
+
+        document.getElementById('sendAll')?.addEventListener('click', async () => {
+            const ids = rows
+                .filter(row => row.dataset.canSend === 'true')
+                .map(row => row.dataset.id);
+            await sendRecords(ids);
+        });
+
+        document.getElementById('retryFailed')?.addEventListener('click', async () => {
+            const ids = rows
+                .filter(row => row.dataset.status === 'Failed' && row.dataset.canSend === 'true')
+                .map(row => row.dataset.id);
+            await sendRecords(ids);
+        });
+
+        document.getElementById('dryRunButton')?.addEventListener('click', async () => {
+            const response = await fetch('@Url.Action("ValidateDryRun")');
+            const result = await response.json();
+            const blocking = result.blockingRecords || [];
+            const target = document.getElementById('dryRunResult');
+            target.innerHTML = blocking.length
+                ? '<div class="alert alert-warning mt-3"><strong>' + blocking.length + '</strong> blocking record(s) found.</div>'
+                : '<div class="alert alert-success mt-3">Dry run passed for all sendable records.</div>';
+        });
+
+        async function sendRecords(ids) {
+            if (!ids.length) {
+                writeLog('No sendable records selected.');
+                return;
+            }
+
+            progressBar.style.width = '0%';
+            progressBar.textContent = '0%';
+            sendLog.innerHTML = '';
+
+            for (let index = 0; index < ids.length; index++) {
+                const id = ids[index];
+                const row = document.getElementById('record-' + id);
+                setRowStatus(row, 'Sending', 'Sending...');
+                const formData = new FormData();
+                formData.append('__RequestVerificationToken', token);
+                formData.append('id', id);
+
+                try {
+                    const response = await fetch('@Url.Action("SendEmail")', { method: 'POST', body: formData });
+                    const result = await response.json();
+                    updateRow(row, result);
+                    writeLog((result.success ? 'Sent: ' : 'Failed: ') + row.dataset.code + ' - ' + (result.message || result.error || result.status));
+                } catch (error) {
+                    setRowStatus(row, 'Failed', error.message);
+                    writeLog('Failed: ' + row.dataset.code + ' - ' + error.message);
+                }
+
+                const percent = Math.round(((index + 1) / ids.length) * 100);
+                progressBar.style.width = percent + '%';
+                progressBar.textContent = percent + '%';
+            }
+        }
+
+        function updateRow(row, result) {
+            if (!row) {
+                return;
+            }
+
+            row.dataset.status = result.status;
+            row.dataset.canSend = result.canSend ? 'true' : 'false';
+            setRowStatus(row, result.status, result.error || result.message || '');
+            row.querySelector('.sent-at').textContent = result.sentAt || '';
+            const button = row.querySelector('.send-one');
+            const checkbox = row.querySelector('.row-select');
+            if (button) {
+                button.disabled = !result.canSend;
+                button.textContent = result.actionLabel || 'Send Email';
+            }
+            if (checkbox) {
+                checkbox.disabled = !result.canSend;
+                checkbox.checked = false;
+            }
+        }
+
+        function setRowStatus(row, status, detail) {
+            if (!row) {
+                return;
+            }
+
+            const badge = row.querySelector('.status-badge');
+            const detailText = row.querySelector('.detail-text');
+            if (badge) {
+                badge.textContent = status;
+                badge.className = 'badge status-badge ' + badgeClass(status);
+            }
+            if (detailText) {
+                detailText.textContent = detail || '';
+            }
+        }
+
+        function badgeClass(status) {
+            if (status === 'Sent') return 'text-bg-success';
+            if (status === 'Failed' || status === 'Invalid Filename') return 'text-bg-danger';
+            if (status === 'Ready To Send') return 'text-bg-primary';
+            if (status === 'Sending') return 'text-bg-info';
+            if (status.includes('Duplicate') || status === 'Email Missing') return 'text-bg-warning';
+            return 'text-bg-secondary';
+        }
+
+        function writeLog(message) {
+            const item = document.createElement('div');
+            item.textContent = message;
+            sendLog.prepend(item);
+        }
+    </script>
+}
